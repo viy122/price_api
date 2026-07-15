@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+httpx
+aiomysql
+pdfplumber
+beautifulsoup4
+openpyxl
