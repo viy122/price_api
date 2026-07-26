@@ -30,6 +30,8 @@ from app.sources.sportscentral import SportsCentralSource
 from app.sources.chrissports import ChrisSportsSource
 from app.sources.rosepharmacy import RosePharmacySource
 from app.sources.metro import MetroSource
+from app.sources.discovery import build_dynamic_source
+from app import vendor_registry
 
 SOURCES = [
     PSDBMSource(), PSDBMExcelSource(), VillManSource(), ComplinkSource(), OctagonSource(),
@@ -42,3 +44,8 @@ SOURCES = [
     TobysSportsSource(), SportsCentralSource(), ChrisSportsSource(),
     RosePharmacySource(), MetroSource(),
 ]
+
+for _row in vendor_registry.list_approved():
+    SOURCES.append(
+        build_dynamic_source(_row.id, _row.platform, _row.base_url, _row.seller, _row.department)
+    )

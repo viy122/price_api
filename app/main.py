@@ -3,15 +3,18 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Literal, Optional
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, Query, Response
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-from app import cache, db
+from app import cache, db, vendor_registry
 from app.canvass import build_canvass_xlsx
 from app.models import NormalizedResult, SearchResponse
 from app.sources import SOURCES
 from app.sources.base import BaseSource
+from app.sources.discovery import build_dynamic_source, detect_platform, search_candidate_domains
 
 Department = Literal[
     "appliances", "medical", "office", "it", "janitorial", "hardware", "furniture", "sports"
@@ -41,6 +44,14 @@ _scrape_sems: dict[str, asyncio.Semaphore] = {}
 PREWARM_INTERVAL_SECONDS = 6 * 60 * 60
 PREWARM_TOP_QUERIES = 20
 PREWARM_WINDOW_DAYS = 30
+
+# New-vendor discovery via SerpApi: runs once a day against the same
+# most-searched terms driving cache pre-warming. Disabled automatically
+# (search_candidate_domains returns []) unless SERPAPI_KEY is set.
+VENDOR_DISCOVERY_INTERVAL_SECONDS = 24 * 60 * 60
+VENDOR_DISCOVERY_TOP_QUERIES = 10
+VENDOR_DISCOVERY_WINDOW_DAYS = 30
+VENDOR_DISCOVERY_RESULTS_PER_QUERY = 5
 
 
 # Per-source live-scrape health, keyed by source class name. Only real
@@ -186,12 +197,40 @@ async def _prewarm_loop() -> None:
         await asyncio.sleep(PREWARM_INTERVAL_SECONDS)
 
 
+async def _vendor_discovery_once() -> None:
+    queries = await db.top_queries(VENDOR_DISCOVERY_TOP_QUERIES, VENDOR_DISCOVERY_WINDOW_DAYS)
+    for query in queries:
+        candidates = await search_candidate_domains(
+            f"{query} philippines", VENDOR_DISCOVERY_RESULTS_PER_QUERY
+        )
+        for base_url in candidates:
+            if vendor_registry.get_by_base_url(base_url) is not None:
+                continue  # already discovered before, regardless of outcome
+            platform, _ = await detect_platform(base_url)
+            if platform is not None:
+                vendor_registry.add_pending(base_url, _guess_seller(base_url), None, platform)
+            await asyncio.sleep(1)  # be polite to candidate sites
+        await asyncio.sleep(2)
+
+
+async def _vendor_discovery_loop() -> None:
+    await asyncio.sleep(60)  # let the server finish starting up first
+    while True:
+        try:
+            await _vendor_discovery_once()
+        except Exception:
+            pass
+        await asyncio.sleep(VENDOR_DISCOVERY_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     await db.init()
     prewarm_task = asyncio.create_task(_prewarm_loop())
+    vendor_discovery_task = asyncio.create_task(_vendor_discovery_loop())
     yield
     prewarm_task.cancel()
+    vendor_discovery_task.cancel()
     await db.close()
 
 
@@ -334,6 +373,82 @@ async def admin_sources(
 
     failing = [r["source"] for r in report if r["status"] == "failing"]
     return {"total": len(report), "failing": failing, "sources": report}
+
+
+class VendorDiscoverRequest(BaseModel):
+    url: str
+    seller: Optional[str] = None
+    department: Optional[Department] = None
+
+
+class VendorApproveRequest(BaseModel):
+    department: Optional[Department] = None
+
+
+def _guess_seller(base_url: str) -> str:
+    host = urlparse(base_url).netloc or base_url
+    host = host.removeprefix("www.")
+    name = host.split(".")[0]
+    return name.replace("-", " ").title()
+
+
+@app.post("/admin/vendors/discover", summary="Detect a manually-submitted vendor's platform")
+async def discover_vendor(req: VendorDiscoverRequest):
+    base_url = req.url.rstrip("/")
+    platform, error = await detect_platform(base_url)
+    if platform is None:
+        return {"detected": None, "message": error}
+
+    seller = req.seller or _guess_seller(base_url)
+    vendor = vendor_registry.add_pending(base_url, seller, req.department, platform)
+    return {"detected": platform, "vendor": vendor}
+
+
+@app.get("/admin/vendors/pending", summary="List vendors awaiting approval")
+async def list_pending_vendors(
+    probe: Annotated[
+        bool, Query(description="Live-test each pending vendor with a canary query")
+    ] = False,
+):
+    pending = vendor_registry.list_pending()
+    if not probe:
+        return {"total": len(pending), "vendors": pending}
+
+    async def _probe(vendor: vendor_registry.VendorSource):
+        source = build_dynamic_source(
+            vendor.id, vendor.platform, vendor.base_url, vendor.seller, vendor.department
+        )
+        try:
+            results, error = await source.search("printer", 3)
+        except Exception as exc:
+            results, error = [], str(exc)
+        return {"vendor": vendor, "sample_results": results, "error": error}
+
+    report = await asyncio.gather(*[_probe(v) for v in pending])
+    return {"total": len(report), "vendors": report}
+
+
+@app.post("/admin/vendors/{vendor_id}/approve", summary="Approve a pending vendor and go live")
+async def approve_vendor(vendor_id: int, req: VendorApproveRequest = VendorApproveRequest()):
+    vendor = vendor_registry.get(vendor_id)
+    if vendor is None or vendor.status != "pending":
+        raise HTTPException(status_code=404, detail="No pending vendor with that id")
+
+    vendor = vendor_registry.approve(vendor_id, req.department)
+    SOURCES.append(
+        build_dynamic_source(vendor.id, vendor.platform, vendor.base_url, vendor.seller, vendor.department)
+    )
+    return {"vendor": vendor}
+
+
+@app.post("/admin/vendors/{vendor_id}/reject", summary="Reject a pending vendor")
+async def reject_vendor(vendor_id: int):
+    vendor = vendor_registry.get(vendor_id)
+    if vendor is None or vendor.status != "pending":
+        raise HTTPException(status_code=404, detail="No pending vendor with that id")
+
+    vendor = vendor_registry.reject(vendor_id)
+    return {"vendor": vendor}
 
 
 @app.get("/health", summary="Health check")
