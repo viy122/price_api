@@ -16,8 +16,8 @@ from openpyxl.utils import get_column_letter
 
 from app.models import NormalizedResult
 
-_HEADERS = ["Item", "Rank", "Supplier", "Product Description", "UOM", "Price (PHP)", "Official", "URL"]
-_WIDTHS = [28, 6, 24, 52, 10, 14, 10, 60]
+_HEADERS = ["Item", "Rank", "Supplier", "Product Description", "UOM", "Price (PHP)", "Warranty", "Official", "URL"]
+_WIDTHS = [28, 6, 24, 52, 10, 14, 20, 10, 60]
 
 _THIN = Side(style="thin", color="B0B0B0")
 _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
@@ -49,7 +49,7 @@ def build_canvass_xlsx(item_quotes: list[tuple[str, list[NormalizedResult]]]) ->
 
     for item, quotes in item_quotes:
         if not quotes:
-            ws.append([item, "", "— walang nakuhang quote —", "", "", "", "", ""])
+            ws.append([item, "", "— walang nakuhang quote —", "", "", "", "", "", ""])
             for col in range(1, len(_HEADERS) + 1):
                 cell = ws.cell(row=ws.max_row, column=col)
                 cell.fill = _NO_QUOTE_FILL
@@ -63,6 +63,7 @@ def build_canvass_xlsx(item_quotes: list[tuple[str, list[NormalizedResult]]]) ->
                 q.description,
                 q.uom,
                 q.price_php,
+                q.warranty,
                 "YES" if q.is_official else "",
                 q.url,
             ])

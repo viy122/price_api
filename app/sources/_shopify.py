@@ -4,10 +4,16 @@ import re
 from datetime import datetime, timezone, timedelta
 
 import httpx
+from bs4 import BeautifulSoup
 
 from app.models import NormalizedResult
 from app.sources.base import BaseSource
 from app.sources._common import get_client, HTTP_TIMEOUT
+from app.sources._warranty import extract_warranty
+
+# Detail-page fetches (for warranty lookup) are extra requests on top of the
+# predictive-search call, so cap how many run at once per search.
+_WARRANTY_CONCURRENCY = 5
 
 _TZ_MNL = timezone(timedelta(hours=8))
 
@@ -42,6 +48,12 @@ class ShopifyPredictiveSearchSource(BaseSource):
     base_url: str
     seller: str
 
+    # Warranty text only lives on the product detail page, not in the
+    # predictive-search JSON, so fetching it costs one extra request per
+    # result. Off by default; only sources known to list warranties (e.g.
+    # appliances) opt in.
+    fetch_warranty: bool = False
+
     async def search(self, query: str, limit: int) -> tuple[list[NormalizedResult], str | None]:
         params = {
             "q": query,
@@ -69,7 +81,27 @@ class ShopifyPredictiveSearchSource(BaseSource):
         except Exception as exc:
             return [], f"{self.seller}: failed to parse results — {exc}"
 
+        if self.fetch_warranty and results:
+            await self._attach_warranties(results)
+
         return results, None
+
+    async def _attach_warranties(self, results: list[NormalizedResult]) -> None:
+        sem = asyncio.Semaphore(_WARRANTY_CONCURRENCY)
+
+        async def _fill(result: NormalizedResult) -> None:
+            async with sem:
+                try:
+                    resp = await get_client().get(result.url)
+                    resp.raise_for_status()
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    warranty = extract_warranty(soup)
+                    if warranty:
+                        result.warranty = warranty
+                except Exception:
+                    pass  # leave the "Wala" default on any fetch/parse failure
+
+        await asyncio.gather(*[_fill(r) for r in results])
 
     def _parse(self, data: dict, query: str, limit: int) -> list[NormalizedResult]:
         scraped_at = _now_mnl()

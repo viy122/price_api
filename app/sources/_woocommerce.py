@@ -51,7 +51,9 @@ class WooCommerceSource(BaseSource):
             if title_el is not None:
                 link = title_el.find("a") or title_el.find_parent("a")
             else:
-                link = card.select_one("h4 > a, h3 > a")
+                # Flatsome theme (and others) render the title as
+                # <p class="name product-title"><a>...</a></p> instead.
+                link = card.select_one("h4 > a, h3 > a, .product-title > a")
                 title_el = link
             if title_el is None:
                 continue

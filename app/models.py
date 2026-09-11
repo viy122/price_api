@@ -14,6 +14,7 @@ class NormalizedResult(BaseModel):
     is_official: bool
     url: str
     image_url: Optional[str] = None
+    warranty: str = "Wala"
     scraped_at: datetime
 
 

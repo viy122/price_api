@@ -13,6 +13,7 @@ from app import cache, db, vendor_registry
 from app.canvass import build_canvass_xlsx
 from app.models import NormalizedResult, SearchResponse
 from app.sources import SOURCES
+from app.sources._common import words_match
 from app.sources.base import BaseSource
 from app.sources.discovery import build_dynamic_source, detect_platform, search_candidate_domains
 
@@ -264,6 +265,21 @@ async def search(
     asyncio.create_task(db.log_search(item, department))
 
     per_source, errors = await _fan_out(item, department)
+
+    # A store's own on-site search often returns loosely-related filler
+    # (accessories, unrelated bestsellers) instead of a true empty result
+    # when nothing really matches — e.g. a "laptop" search surfacing laptop
+    # bags, desks, or totally unrelated items from off-topic stores. Require
+    # every query word (or a known alias) to appear in the description
+    # before merging, same relevance guard /canvass uses; fall back to
+    # unfiltered per-source results if that wipes a source out entirely.
+    words = [w for w in item.lower().split() if len(w) >= 3]
+    if words:
+        per_source = [
+            filtered
+            for results in per_source
+            if (filtered := [r for r in results if words_match(item, r.description.lower())])
+        ] or per_source
 
     # Round-robin across sources so later-registered sources still surface
     # instead of the first few sources consuming every slot.

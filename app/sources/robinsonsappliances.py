@@ -5,3 +5,4 @@ class RobinsonsAppliancesSource(ShopifyPredictiveSearchSource):
     base_url = "https://robinsonsappliances.com.ph"
     seller = "Robinsons Appliances"
     department = "appliances"
+    fetch_warranty = True

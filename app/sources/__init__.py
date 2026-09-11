@@ -1,5 +1,3 @@
-from app.sources.psdbm import PSDBMSource
-from app.sources.psdbm_excel import PSDBMExcelSource
 from app.sources.villman import VillManSource
 from app.sources.complink import ComplinkSource
 from app.sources.octagon import OctagonSource
@@ -30,11 +28,13 @@ from app.sources.sportscentral import SportsCentralSource
 from app.sources.chrissports import ChrisSportsSource
 from app.sources.rosepharmacy import RosePharmacySource
 from app.sources.metro import MetroSource
+from app.sources.laptopfactory import LaptopFactorySource
+from app.sources.mandauefoam import MandaueFoamSource
 from app.sources.discovery import build_dynamic_source
 from app import vendor_registry
 
 SOURCES = [
-    PSDBMSource(), PSDBMExcelSource(), VillManSource(), ComplinkSource(), OctagonSource(),
+    VillManSource(), ComplinkSource(), OctagonSource(),
     PhilMedicalSuppliesSource(), OfficeWarehouseSource(), MedShopSource(),
     StandardWholesaleSource(), PaperCartSource(), OfficeWorksSource(), BultuhanSource(),
     BlimsSource(), OfficeWorldSource(), OurHomeSource(), FurnitureManilaSource(), CostULessSource(),
@@ -43,6 +43,7 @@ SOURCES = [
     PCExpressSource(), DynaQuestPCSource(), PCWorxSource(), EasyPCSource(),
     TobysSportsSource(), SportsCentralSource(), ChrisSportsSource(),
     RosePharmacySource(), MetroSource(),
+    LaptopFactorySource(), MandaueFoamSource(),
 ]
 
 for _row in vendor_registry.list_approved():
